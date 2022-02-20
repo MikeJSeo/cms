@@ -1,6 +1,8 @@
 import os
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+
 
 os.chdir("C:/Users/mike/Desktop/")
 benef = pd.read_csv("beneficiary summary.csv")
@@ -32,9 +34,9 @@ outpatient_small['claim_date'] = (outpatient_small['CLM_THRU_DT'] - threshold)/ 
 merged = pd.merge(benef, outpatient_small, how = 'left')
 
 
-d = merged['DESYNPUF_ID'].value_counts()
 
-import matplotlib.pyplot as plt
+# Find how many 
+d = merged['DESYNPUF_ID'].value_counts()
 n, bins, patches = plt.hist(x=d, bins='auto', color='#0504aa',
                             alpha=0.7, rwidth=0.85)
 plt.grid(axis='y', alpha=0.75)
