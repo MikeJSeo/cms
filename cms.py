@@ -172,7 +172,7 @@ lgb_model2 = lgb.train(params_regression, dtrain_claimed,
                       verbose_eval=500)
 amt_lgb = lgb_model2.predict(test_all, num_iteration = lgb_model2.best_iteration)
 
-final_amt = pr_lgb * amt_lgb
+final_amt = pd.Series(pr_lgb * amt_lgb)
 
 real_final_amt = getTimeFramewithFeatures(merged, 5)['CLM_PMT_AMT']
 
@@ -181,6 +181,8 @@ def rmse(y_true, y_pred):
 rmse(real_final_amt, final_amt)
 #778.80118
 
+pd.set_option('min_rows', 100)
+pd.concat([real_final_amt, final_amt], axis = 1)
 
 
 
