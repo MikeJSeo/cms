@@ -146,6 +146,7 @@ params_regression = {
 }
 
 
+
 train_all = train.drop(['DESYNPUF_ID', 'CLM_PMT_AMT', 'claimed'], axis = 1)
 train_all_label = train['claimed']
 dtrain_all = lgb.Dataset(train_all, label = train_all_label)
@@ -185,4 +186,5 @@ pd.set_option('min_rows', 100)
 pd.concat([real_final_amt, final_amt], axis = 1)
 
 
-
+# trend
+# seasonality
