@@ -96,7 +96,7 @@ def getTimeFramewithFeatures(data, k):
     tf1['INTERVAL_DATES'] = np.array((aggCLMDates['max'] - aggCLMDates['min']) / np.timedelta64(1, 'D'))
     tf1['VISIT_COUNT'] = np.array(aggCLMDates['count'])
     
-    aggCLMPMT = tf.groupby('DESYNPUF_ID')['CLM_PMT_AMT'].aggregate(['sum'])
+    aggCLMPMT = tf.groupby('DESYNPUF_ID')['CLM_PMT_AMT'].aggregate(['sum', 'var'])
     tf1['TOTAL_PMT'] = np.array(aggCLMPMT['sum'])
     
     tf2 = pd.merge(tf0, tf1, how = 'left')
@@ -104,10 +104,13 @@ def getTimeFramewithFeatures(data, k):
     
     tf2['MAX_VISIT_ID'] = tf2['MAX_VISIT_ID'].fillna(0)
     tf2['VISIT_COUNT'] = tf2['VISIT_COUNT'].fillna(0)
-    tf2['FIRST_VISIT_FROM_PERIOD_START'] = tf2['FIRST_VISIT_FROM_PERIOD_START'].fillna(0)
-    tf2['LAST_VISIT_FROM_PERIOD_END']  = tf2['LAST_VISIT_FROM_PERIOD_END'].fillna(0)
-    tf2['INTERVAL_DATES'] = tf2['INTERVAL_DATES'].fillna(0)
     tf2['TOTAL_PMT'] = tf2['TOTAL_PMT'].fillna(0)
+    
+    maxtime = np.array(((getTimeFrameDates(k)[1] - getTimeFrameDates(k)[1]) / np.timedelta64(1, 'D')))
+    tf2['FIRST_VISIT_FROM_PERIOD_START'] = tf2['FIRST_VISIT_FROM_PERIOD_START'].fillna(maxtime)
+    tf2['LAST_VISIT_FROM_PERIOD_END']  = tf2['LAST_VISIT_FROM_PERIOD_END'].fillna(maxtime)
+    tf2['INTERVAL_DATES'] = tf2['INTERVAL_DATES'].fillna(maxtime)
+    
     
     # Merge associated test data target
     tf_testID = np.unique(data.loc[(data['CLM_THRU_DT'] >= getTimeFrameDates(k+1)[0]) & (data['CLM_THRU_DT'] < getTimeFrameDates(k+1)[1]), 'DESYNPUF_ID'])
