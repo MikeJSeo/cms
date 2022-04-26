@@ -1,0 +1,270 @@
+---
+title: "Causal Inference in Observational Epidemiology"
+author: "Michael Seo"
+date: "28 10 2020"
+output: html_document
+---
+
+
+# Practical on marginal structural models
+
+In this practical we follow the description in Cain et al 2010 (Cain LE, Robins JM, Lanoy E, Logan R, Costagliola D, Hernan MA. When to start treatment? A systematic approach to the comparison of dynamic regimes using observational data. *Int J Biostat* 2010; **6**: Article 18) which is included on your memory stick. We use a hypothetical but similar data set (**dynamic.dta**). Note that the following **eligibility criteria** were applied for a person to be included: antiretroviral therapy naive, no history of AIDS-defining illness, no pregnancy, HIV-RNA > 500 copied/mL, CD4 cell count and HIV-RNA measurements within six months of each other, and CD4 cell count between 200 and 500 cells/mm^3^. So, month 0 is the first time that for that person the CD4 cell count is less than 500.
+
+## Regimes to be compared
+
+We will analyze 7 dynamic treatment strategies: individuals initiate ART immediately after (during the same month) their CD4 cell count crosses for the first time a particular threshold (500, 450, 400, 350, 300, 250, 200)
+
+
+## R packages needed
+
+```{r}
+#install.packages("readstata13")
+#install.packages("sandwich")
+#install.packages("jtools")
+
+library(readstata13) #reading stata data
+library(sandwich) #for robust standard errors
+library(jtools) #for robust standard errors
+```
+
+
+## Getting to know the data
+
+The data for this practical come from a (hypothetical) HIV cohort study. Read in the dataset.
+
+```{r}
+setwd("C:/Users/mike/Desktop/Documents - New/ISPM/courses/external courses/wengen causal inference course/data")
+dat <- read.dta13("dynamic.dta")
+```
+
+With str command, you will get general information on the data set.
+
+```{r}
+str(dat)
+```
+
+As in the second practical, the data contains certain information, like CD4 values at baseline, as a precise measurement (cd4_0)or as categories (cd4_0_cat). You can check how the categories were defined by, for example:
+
+```{r}
+tapply(dat$cd4_0, dat$cd4_0_cat, summary)
+```
+
+Similarly you could check on year_0_cat
+
+```{r}
+tapply(dat$year_0, dat$year_0_cat, summary)
+```
+
+You can also browse the data after sorting for id and month
+
+```{r}
+dat <- dat[order(dat$id, dat$month),]
+#View(dat[1:300, c("id", "month", "sex", "cd4_v", "visit_cd4", "ts_last_cd4", "min_cd4_v", "art", "pastart")])
+```
+
+What is the meaning of the variables ts_last_cd4 and min_cd4_v?
+
+Continue browsing: At which month did the person with **id==93003** start ART?
+
+Does the person with **id==93003** follow any of the regimes we want to investigate?
+
+What about the person with **id==93006**?
+
+You can restrict the browsing to that person by 
+
+```{r}
+#View(dat[dat$id==93006,])
+```
+
+Given the eligibility criteria which treatment regimens could **id==93006** follow?
+
+What is the meaning of the variable **art_base**?
+
+Now we will work through the steps to estimate the treatment effects of the regimes "start when crossing below x" (x= 200, 250, 300, 350, 400, 450) compared to  "start when crossing below 500".
+
+For the next steps we reduce the data set and keep only the variables we will need:
+
+```{r}
+cero <- dat[,c("id", "aidsdeath", "censor", "art", "eligible2", "month", "monthsq", "cd4_v_cat", "rna_v_cat", "ts_last_rna", "ts_last_cd4", "aids", "sex", "age_0_cat", "origin", "year_0_cat", "mode", "cd4_0_cat", "rna_0_cat", "art_base", "cd4_0", "cd4_v", "min_cd4_v", "year_0")]
+```
+
+## Step 1
+
+```{r}
+factor.var.names <- c("cd4_v_cat", "rna_v_cat", "sex", "age_0_cat", "origin", "year_0_cat", "mode", "cd4_0_cat", "rna_0_cat")
+cero[,factor.var.names] <- lapply(cero[,factor.var.names] , factor)
+
+glm.model <- glm(art ~ month + monthsq + relevel(cd4_v_cat, ref = "5") + relevel(rna_v_cat, ref = "3") + relevel(sex, ref = "1") + relevel(age_0_cat, ref = "3") + relevel(origin, ref = "4") + relevel(year_0_cat, ref = "4") + relevel(mode, ref = "4") + relevel(cd4_0_cat, ref = "2") + relevel(rna_0_cat, ref = "3") , family = binomial, data = cero, subset = eligible2 == 1)
+exp(coef(glm.model)) #odds ratio                   
+```
+
+Note: we run this regression only for those who do not already start ART at month==0 and for the months later than month==0. This is done by restricting the logistic regression with subset = eligible2 ==1.
+
+Then we predict the probability to start art using the predict statement.
+
+```{r}
+pA_d <- rep(NA, dim(cero)[1])
+pA_d[cero$eligible2 == 1] <- predict(glm.model, type = "response")
+cero$pA_d <- pA_d
+```
+
+## Step 2
+
+We now create replicates (clones) for each individual and for each strategy (or regime) under consideration. 
+
+```{r}
+cero_pre_regimes <- cero[rep(seq_len(nrow(cero)), each = 7), ]
+cero_pre_regimes$regimenumber <- rep(1:7, nrow(cero))
+cero_pre_regimes$regime <- rep(200 + (1:7 - 1)*50, nrow(cero))
+```
+
+Check the data you got after sorting
+
+```{r}
+cero_pre_regimes <- cero_pre_regimes[order(cero_pre_regimes$id, cero_pre_regimes$regimenumber, cero_pre_regimes$month),]
+#View(cero_pre_regimes)
+```
+
+We now need to prepare variables that help us define which strategies are allowed for each replicate. The approach is different for those who start ART at baseline (month==0) and for those starting ART later.
+
+```{r}
+id_min_allowed_regime_cutoff <- ifelse(cero_pre_regimes$art_base == 1, 50 * ceiling((cero_pre_regimes$cd4_0+1)/50), NA)
+```
+
+You should do some data checking for those with art_base==1 or some of the id's we have looked at, e.g. for id==93006
+
+Now drop those regimes that are not okay if ART is started at baseline.
+
+```{r}
+not_okay_rows <- cero_pre_regimes$regime < id_min_allowed_regime_cutoff & cero_pre_regimes$art_base == 1
+cero_pre_regimes <- cero_pre_regimes[!not_okay_rows,]
+```
+
+Now we take care of those who do not start ART at baseline.
+
+```{r}
+id_max_allowed_regime_cutoff= ifelse(cero_pre_regimes$art_base == 0, 50 * floor(cero_pre_regimes$cd4_0/50), NA)
+```
+
+Now we drop those who are not okay if art_base==0.
+
+```{r}
+not_okay_rows2 <- cero_pre_regimes$regime > id_max_allowed_regime_cutoff & cero_pre_regimes$art_base == 0
+cero_pre_regimes <- cero_pre_regimes[!not_okay_rows2,]
+```
+
+Check,
+
+```{r}
+#View(cero_pre_regimes[cero_pre_regimes$id==93005,])
+table(cero_pre_regimes[cero_pre_regimes$id==93005,]$regime)
+```
+
+At the end we generate a new id which is unique for each id and the retained strategies.
+
+```{r}
+comb <- xtabs(~id+regime, data=cero_pre_regimes)
+#comb
+comb <- c(t(comb)) #make them into vector
+comb <- comb[comb!=0] #remove zero
+mynewid <- rep(1:length(comb), comb) 
+cero_all_regimes <- cero_pre_regimes
+cero_all_regimes$mynewid <- mynewid
+```
+
+## Step 3: Censor replicates when they deviate from their assigned strategy
+
+As discussed in the lecture, we now need to censor those replicates at the time they deviate from their assigned treatment strategy. This can happen in several ways for those who do not start ART at baseline.
+
+We use two additional variables **c** (indicator for artificial censoring) and **ec** (indicator for eligibility for artificial censoring) to achieve this.
+
+```{r}
+cvalue <- rep(0, dim(cero_all_regimes)[1])
+```
+
+If ART is started at baseline then they never deviate from assigned strategy and eligibility_c==0 for all further visits. If ART is not started at baseline then they might deviate from assigned strategy and all further visits are potentially eligible for artificial censoring.
+
+```{r}
+eligible_c <- ifelse(cero_all_regimes$art_base ==1, 0, 1) 
+```
+
+Now we need to censor (set cvalue to 1) replicates who a) start ART before crossing below the CD4 cell count threshold and b) those who do not start when crossing below the CD4 cell count threshold.
+
+```{r}
+cvalue[cero_all_regimes$art== 0 & cero_all_regimes$regime > cero_all_regimes$cd4_v & eligible_c==1] <- 1
+cvalue[cero_all_regimes$art== 1 & cero_all_regimes$regime <= cero_all_regimes$min_cd4_v & eligible_c==1] <- 1
+```
+
+For each replicate, we need now to fill in c==1 for all months after the first time c was put to 1. We do this by using the cummax function.
+
+```{r}
+cvalue <-  unlist(aggregate(cvalue, by=list(cero_all_regimes$mynewid) , FUN= cummax)$x)
+```
+
+Now drop all records with c equal to 1.
+
+```{r}
+uno <- cero_all_regimes[cvalue!= 1,]
+```
+
+Let's see how many regimes we have starting at month zero and how many AIDS/death events over all regimes.
+
+```{r}
+xtabs(~regime, data = uno[uno$month==0,])
+xtabs(~regime +aidsdeath, data=uno)
+```
+
+
+## Step 4: Build the nonstabilized IP weights
+
+We have to consider several different situations when calculating the IP weights.
+- For ineligible observations, the contribution to the weights is 1.
+- For eligible observations before the CD4 threshold is crossed, the contribution to the weights is the probability of not initiating (1-pA_d).
+- For eligible observations when the CD4 threshold is crossed, the contribution to the weights is the probability of initiating (pA_d)
+- For eligible observations after the CD4 threshold is crossed, the contribution to the weights is 1.
+
+Finally, these contributions are then multiplied to form the cumulative weight for each month.
+
+We first create the denominators of the weights per line.
+
+```{r}
+denA_line <- ifelse(uno$eligible2==0, 1, 0)
+denA_line[uno$art==0 & uno$eligible2==1] <- 1 - uno$pA_d[uno$art==0 & uno$eligible2==1]
+denA_line[uno$art==1 & uno$eligible2==1] <- uno$pA_d[uno$art==1 & uno$eligible2==1]
+```
+
+Note that eligible2 is 1 for all months after month=0 for those who did not start ART at baseline.
+
+Now we create the cumulative probability for all the months and then the weight.
+
+```{r}
+denA_cum <- unlist(aggregate(denA_line, by=list(uno$mynewid) , FUN= cumprod)$x)
+w <- 1/denA_cum
+w[is.na(uno$aidsdeath)] <- NA
+quantile(w,probs = c(0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99), na.rm = TRUE)
+```
+
+Now we truncate the weights at the 99th percentile.
+
+```{r}
+w_cutoff <- quantile(w, probs = 0.99, na.rm = TRUE)
+wt_p99 <- w
+wt_p99[w > w_cutoff & !is.na(w)] <- w_cutoff
+summary(wt_p99)
+```
+
+## Step 5: Estimate the hazard ratios
+
+This is the last step. By fitting a weighted logistic regression, we estimate the hazard ratios for comparing the strategies "start immediately when dropping below x" to "start immediately when dropping below cd4 500". In this weighted regression only time and baseline variables are included. We can calculate robust standard errors (as in Stata) by specifying vcov = vcovHC(glm.model.final, "HC1") using coeftest.
+
+```{r}
+factor.var.names2 <- c("aidsdeath","regime", "sex", "age_0_cat", "origin", "year_0_cat", "mode", "cd4_0_cat", "rna_0_cat")
+uno[,factor.var.names2] <- lapply(uno[,factor.var.names2] , factor)
+
+glm.model.final <- glm(aidsdeath ~ relevel(regime, ref = "500") + month + monthsq + sex + age_0_cat + origin + year_0_cat + mode + cd4_0_cat + rna_0_cat, family = binomial, data = uno, weights = wt_p99)
+exp(coef(glm.model.final)) #odds ratio
+
+# calculating the odds-ratio standard errors using package jtools
+robust <- summ(glm.model.final, robust = "HC1", cluster = "id")
+exp(coef(glm.model.final)) * robust$coeftable[,2]
+```
